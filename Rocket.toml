@@ -1,0 +1,2 @@
+[default.databases.cataars]
+url = "mysql://user:password@localhost:3306/cataars"
