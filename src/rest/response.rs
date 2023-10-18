@@ -2,7 +2,8 @@ use rocket::serde::Serialize;
 use std::collections::HashMap;
 
 pub enum Links {
-    Root
+    Root,
+    Users
 }
 
 impl Links {
@@ -14,6 +15,9 @@ impl Links {
                 ("users", "/users"),
                 ("login", "/login"),
                 ("images", "/images")
+            ]),
+            Self::Users => HashMap::from([
+                ("user", "/user/:id")
             ])
         }
     }
