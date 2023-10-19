@@ -1,11 +1,13 @@
-use rocket::{Responder, serde::json::Json};
+use rocket::Responder;
 
 #[derive(Responder)]
 pub enum DefaultResponder<T> {
     #[response(status = 200)]
-    Ok(Json<T>),
-    #[response(status = 500)]
-    Error(String),
+    Ok(T),
+    #[response(status = 400)]
+    BadRequest(String),
     #[response(status = 404)]
-    NotFound(String)
+    NotFound(String),
+    #[response(status = 500)]
+    Error(String)
 }

@@ -17,7 +17,7 @@ struct Info {
 }
 
 #[get("/")]
-fn index() -> DefaultResponder<Response<Info>> {
+fn index() -> DefaultResponder<Json<Response<Info>>> {
     DefaultResponder::Ok(Json(Response::new(Info {
             name: String::from(env!("CARGO_PKG_NAME")),
             version: String::from(env!("CARGO_PKG_VERSION")),

@@ -1,17 +1,22 @@
 use rocket_db_pools::{Connection, sqlx};
-use rocket::{futures::{TryStreamExt, TryFutureExt}, serde::Serialize};
-use sqlx::{Row, Error, mysql::MySqlRow};
+use rocket::{futures::{TryStreamExt, TryFutureExt}, serde::{Serialize, Deserialize}};
+use sqlx::{Row, Error, mysql::{MySqlRow, MySqlQueryResult}};
 
 use crate::repositories::CatDB;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(crate = "rocket::serde")]
 pub struct User {
-    id: i32,
-    username: String,
-    password: String,
-    public: bool,
-    admin: bool
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub public: bool,
+    #[serde(default)]
+    pub admin: bool
 }
 
 impl User {
@@ -26,7 +31,7 @@ impl User {
     }
 }
 
-pub async fn list(mut db: Connection<CatDB>) -> Result<Vec<User>, Error> {
+pub async fn list(db: &mut Connection<CatDB>) -> Result<Vec<User>, Error> {
     sqlx::query("SELECT * FROM users")
         .fetch(&mut **db)
         .map_ok(User::from)
@@ -34,9 +39,37 @@ pub async fn list(mut db: Connection<CatDB>) -> Result<Vec<User>, Error> {
         .await
 }
 
-pub async fn detail(mut db: Connection<CatDB>, id: i32) -> Result<Option<User>, Error> {
-    sqlx::query("SELECT * FROM users WHERE id = ?").bind(id)
+pub async fn detail(db: &mut Connection<CatDB>, id: i32) -> Result<Option<User>, Error> {
+    sqlx::query("SELECT * FROM users WHERE id = ?")
+        .bind(id)
         .fetch_optional(&mut **db)
         .map_ok(|res| res.map(User::from))
+        .await
+}
+
+pub async fn create(db: &mut Connection<CatDB>, user: User) -> Result<MySqlQueryResult, Error> {
+    sqlx::query("INSERT INTO users (username, password, public) VALUES (?, ?, ?)")
+        .bind(user.username)
+        .bind(user.password)
+        .bind(user.public)
+        .execute(&mut **db)
+        .await
+}
+
+pub async fn update(db: &mut Connection<CatDB>, user: User) -> Result<MySqlQueryResult, Error> {
+    sqlx::query("UPDATE users SET username = ?, password = ?, public = ?, admin = ? WHERE id = ?")
+        .bind(user.username)
+        .bind(user.password)
+        .bind(user.public)
+        .bind(user.admin)
+        .bind(user.id)
+        .execute(&mut **db)
+        .await
+}
+
+pub async fn remove(db: &mut Connection<CatDB>, id: i32) -> Result<MySqlQueryResult, Error> {
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(&mut **db)
         .await
 }
