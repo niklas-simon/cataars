@@ -1,88 +1,84 @@
+use std::vec;
+
 use rocket::{fairing::AdHoc, routes, get, serde::json::{Json, Value}, post, patch, delete};
 use rocket_db_pools::Connection;
-use crate::{repositories::{users::{self, User}, CatDB}, rest::response::Response, rest::responder::DefaultResponder};
+use crate::{repositories::{users::{self, User}, CatDB}, rest::responder::DefaultResponder, extract_from_json, set_if_exists_in_json};
 use sha256::digest;
 
-use super::response::Links;
+use super::Error;
 
 #[get("/")]
-async fn list(mut db: Connection<CatDB>) -> DefaultResponder<Json<Response<Vec<User>>>> {
+async fn list(mut db: Connection<CatDB>) -> DefaultResponder<Vec<User>> {
     match users::list(&mut db).await {
-        Ok(data) => DefaultResponder::Ok(Json(Response::new(data, Links::Users))),
-        Err(err) => DefaultResponder::Error(err.to_string())
+        Ok(data) => DefaultResponder::Ok(Json(data)),
+        Err(err) => DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
     }
 }
 
 #[get("/<id>")]
-async fn detail(mut db: Connection<CatDB>, id: i32) -> DefaultResponder<Json<Response<User>>> {
+async fn detail(mut db: Connection<CatDB>, id: i32) -> DefaultResponder<User> {
     match users::detail(&mut db, id).await {
-        Ok(Some(data)) => DefaultResponder::Ok(Json(Response::new(data, Links::Users))),
-        Ok(None) => DefaultResponder::NotFound(String::from("User not found")),
-        Err(err) => DefaultResponder::Error(err.to_string())
+        Ok(Some(data)) => DefaultResponder::Ok(Json(data)),
+        Ok(None) => DefaultResponder::NotFound(Json(Error::new(String::from("user not found"), vec![String::from("id")]))),
+        Err(err) => DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
     }
 }
 
 #[post("/", data = "<user_json>")]
-async fn create(mut db: Connection<CatDB>, user_json: Json<Value>) -> DefaultResponder<String> {
+async fn create(mut db: Connection<CatDB>, user_json: Json<Value>) -> DefaultResponder<User> {
     let user = user_json.into_inner();
-    let db_user = User {
-        id: 0,
-        username: if let Some(username) = user.get("username").and_then(|u| u.as_str()) { 
-            String::from(username) 
-        } else {
-            return DefaultResponder::BadRequest(String::from("field username is required"))
-        },
-        password: if let Some(password) = user.get("password").and_then(|u| u.as_str()) { 
-            digest(password) 
-        } else {
-            return DefaultResponder::BadRequest(String::from("field password is required"))
-        },
-        public: if let Some(public) = user.get("public").and_then(|u| u.as_bool()) { 
-            public
-        } else {
-            return DefaultResponder::BadRequest(String::from("field public is required"))
-        },
-        admin: false
+    let username = extract_from_json!(user, username, as_str, String::from, BadRequest, "field username is required");
+    match users::get_by_name(&mut db, &username).await {
+        Ok(Some(_)) => return DefaultResponder::BadRequest(Json(Error::new(String::from("already exists"), vec![String::from("username")]))),
+        Err(err) => return DefaultResponder::Error(Json(Error::new_nofields(err.to_string()))),
+        Ok(None) => ()
     };
-    match users::create(&mut db, db_user).await {
-        Ok(_) => DefaultResponder::Ok(String::from("Ok")),
-        Err(err) => DefaultResponder::Error(err.to_string())
+    let db_user = User::new(
+        0,
+        username,
+        extract_from_json!(user, password, as_str, digest, BadRequest, "field password is required"),
+        extract_from_json!(user, public, as_bool, |v| v, BadRequest, "field public is required"),
+        false
+    );
+    if let Err(err) = users::create(&mut db, &db_user).await {
+        return DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
+    };
+    match users::get_by_name(&mut db, &db_user.username).await {
+        Ok(Some(user)) => DefaultResponder::Ok(Json(user)),
+        Ok(None) => DefaultResponder::Error(Json(Error::new_nofields(String::from("user not found but it has been created")))),
+        Err(err) => DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
     }
 }
 
 #[patch("/<id>", data = "<user_json>")]
-async fn update(mut db: Connection<CatDB>, id: i32, user_json: Json<Value>) -> DefaultResponder<String> {
+async fn update(mut db: Connection<CatDB>, id: i32, user_json: Json<Value>) -> DefaultResponder<User> {
     let user = user_json.into_inner();
-    match users::detail(&mut db, id).await {
-        Ok(Some(mut db_user)) => {
-            if let Some(username) = user.get("username").and_then(|u| u.as_str()) {
-                db_user.username = String::from(username);
-            }
-            if let Some(password) = user.get("password").and_then(|u| u.as_str()) {
-                db_user.password = digest(password);
-            }
-            if let Some(public) = user.get("public").and_then(|u| u.as_bool()) {
-                db_user.public = public;
-            }
-            if let Some(admin) = user.get("admin").and_then(|u| u.as_bool()) {
-                db_user.admin = admin;
-            }
-            match users::update(&mut db, db_user).await {
-                Ok(_) => DefaultResponder::Ok(String::from("Ok")),
-                Err(err) => DefaultResponder::Error(err.to_string())
-            }
-        },
-        Ok(None) => DefaultResponder::NotFound(String::from("user not found")),
-        Err(err) => DefaultResponder::Error(err.to_string())
-    }
+    let mut db_user = match users::detail(&mut db, id).await {
+        Ok(Some(db_user)) => db_user,
+        Ok(None) => return DefaultResponder::NotFound(Json(Error::new(String::from("user not found"), vec![String::from("id")]))),
+        Err(err) => return DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
+    };
+    set_if_exists_in_json!(user, &mut db_user, username, as_str, String::from);
+    set_if_exists_in_json!(user, &mut db_user, password, as_str, digest);
+    set_if_exists_in_json!(user, &mut db_user, public, as_bool, bool::from);
+    set_if_exists_in_json!(user, &mut db_user, admin, as_bool, bool::from);
+    if let Err(err) = users::update(&mut db, &db_user).await {
+        return DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
+    };
+    DefaultResponder::Ok(Json(db_user))
 }
 
 #[delete("/<id>")]
-async fn remove(mut db: Connection<CatDB>, id: i32) -> DefaultResponder<String> {
-    match users::remove(&mut db, id).await {
-        Ok(_) => DefaultResponder::Ok(String::from("Ok")),
-        Err(err) => DefaultResponder::Error(err.to_string())
-    }
+async fn remove(mut db: Connection<CatDB>, id: i32) -> DefaultResponder<User> {
+    let db_user = match users::detail(&mut db, id).await {
+        Ok(Some(db_user)) => db_user,
+        Ok(None) => return DefaultResponder::NotFound(Json(Error::new(String::from("user not found"), vec![String::from("id")]))),
+        Err(err) => return DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
+    };
+    if let Err(err) = users::remove(&mut db, id).await {
+        return DefaultResponder::Error(Json(Error::new_nofields(err.to_string())))
+    };
+    DefaultResponder::Ok(Json(db_user))
 }
 
 pub fn stage() -> AdHoc {
